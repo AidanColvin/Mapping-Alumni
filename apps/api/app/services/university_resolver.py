@@ -1,59 +1,47 @@
-"""Resolve a free-text university name to a canonical Institution.
+"""Resolve a free-text university name to a canonical Institution record."""
+from __future__ import annotations
 
-Applies normalization before querying so that "unc chapel hill",
-"UNC", "University of North Carolina" all resolve correctly.
-"""
 import re
-
-from app.adapters import wikidata
 from app.models.domain import Institution
-from app.utils import cache
-from app.utils.logger import log
+from app.adapters import wikidata
+from app.utils.cache import get, put
+from app.utils.logger import get_logger
 
-# Common abbreviations expanded before lookup
-_ABBREVIATIONS: dict[str, str] = {
-    r"\bunc\b": "university of north carolina",
-    r"\bmit\b": "massachusetts institute of technology",
-    r"\bucla\b": "university of california los angeles",
-    r"\busc\b": "university of southern california",
-    r"\bnyc\b": "new york",
-    r"\bcu\b": "columbia university",
-    r"\bgu\b": "georgetown university",
-}
+log = get_logger(__name__)
+
+_TTL = 86_400  # 24 hours
 
 
-def _expand_abbreviations(name: str) -> str:
-    result = name.lower().strip()
-    for pattern, expansion in _ABBREVIATIONS.items():
-        result = re.sub(pattern, expansion, result, flags=re.I)
-    return result.strip()
+_STRIP_SUFFIXES = re.compile(
+    r"\b(university|college|institute|school|of technology|the)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_name(name: str) -> str:
-    """Strip extra punctuation and collapse whitespace."""
-    name = re.sub(r"[^\w\s-]", " ", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    return _expand_abbreviations(name)
+    """Remove common noise words for a cleaner search query."""
+    return _STRIP_SUFFIXES.sub("", name).strip(" ,.-")
 
 
-async def resolve(name: str) -> Institution | None:
-    """Resolve a free-text university name to a canonical Institution."""
-    normalized = _normalize_name(name)
-    cache_key = "resolver:" + normalized
-    cached = cache.get(cache_key)
+def resolve(name: str) -> Institution | None:
+    """Return an Institution for the given university name, using cache when available."""
+    if not name or not name.strip():
+        return None
+
+    cache_key = f"institution:{name.lower().strip()}"
+    cached = get(cache_key)
     if cached:
-        from app.utils.slugify import slugify
+        log.debug("Institution cache hit: %s", name)
         return Institution(**cached)
 
-    institution = await wikidata.resolve_institution(normalized)
-    if not institution:
-        # Fallback: try the original name without abbreviation expansion
-        institution = await wikidata.resolve_institution(name.strip())
+    # Try full name first, then stripped name
+    institution = wikidata.resolve_institution(name)
+    if institution is None:
+        normalized = _normalize_name(name)
+        if normalized and normalized.lower() != name.lower():
+            institution = wikidata.resolve_institution(normalized)
 
     if institution:
-        cache.put(cache_key, institution.model_dump())
-        log("info", "resolved_institution", name=name, resolved=institution.name, qid=institution.wikidata_id)
-    else:
-        log("warn", "institution_not_found", name=name)
+        put(cache_key, institution.__dict__, ttl=_TTL)
 
     return institution

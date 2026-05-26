@@ -1,42 +1,29 @@
-"""API request/response shapes."""
-from typing import Optional
-
 from pydantic import BaseModel
+from typing import List, Dict, Optional, Any
+from app.models.domain import SearchResult, Institution
 
-from app.models.domain import Institution, SearchResult, TitleLevel
-
+class SearchInput(BaseModel):
+    university: str
+    sector: Optional[str] = None
+    title_level: Optional[str] = None
+    company_type: Optional[str] = None
+    region: Optional[str] = None
+    keyword: Optional[str] = None
+    limit: int = 50
+    offset: int = 0
 
 class SearchResponse(BaseModel):
-    results: list[SearchResult]
+    results: List[SearchResult]
     total: int
-    page: int
-    limit: int
-    institution: Optional[dict] = None
-
-
-class UniversityResponse(BaseModel):
-    institution: Institution
-    alumni_count: int
-    top_employers: list[dict]
-    sector_breakdown: dict[str, int] = {}
-    title_level_breakdown: dict[str, int] = {}
-
-
-class HealthResponse(BaseModel):
-    status: str = "ok"
-    version: str = "0.1.0"
-
-
-class StatsResponse(BaseModel):
-    institutions: int
-    people: int
-    cached_pages: int
-
+    institution: Optional[Dict[str, Any]] = None
 
 class SourcesResponse(BaseModel):
-    allowed_domains: list[str]
+    sources: List[Dict[str, str]]
 
+class HealthResponse(BaseModel):
+    status: str
+    database: str
 
-class ErrorResponse(BaseModel):
-    error: str
-    details: Optional[dict] = None
+class UniversityResponse(BaseModel):
+    institution: Dict[str, Any]
+    top_employers: List[Dict[str, Any]] = []

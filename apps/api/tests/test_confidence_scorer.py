@@ -1,32 +1,35 @@
-from datetime import datetime, timezone
-
-from app.models.domain import Company, Employment, Institution, Person, SearchResult
+from app.models.domain import Person, Institution, Company, Employment, SearchResult
 from app.services.confidence_scorer import score
 
 
-def _make(source_type: str, with_employment: bool, with_institution: bool) -> SearchResult:
+def _result(source_type: str, has_title: bool = True, wikidata_id: str | None = "Q1") -> SearchResult:
     return SearchResult(
-        person=Person(
-            id="1",
-            full_name="X",
-            source_url="https://x",
-            source_type=source_type,
-            retrieved_at=datetime.now(timezone.utc),
-            confidence=0.0,
+        person=Person(full_name="Alice", wikidata_id=wikidata_id, source_url="https://wikidata.org/wiki/Q1"),
+        institution=Institution(name="UNC", wikidata_id="Q902595"),
+        employment=Employment(
+            company=Company(name="Google"),
+            title="CEO" if has_title else None,
         ),
-        employment=(
-            [Employment(company=Company(id="c", name="C", slug="c"))] if with_employment else []
-        ),
-        institution=Institution(id="u", name="U", slug="u") if with_institution else None,
+        source_url="https://wikidata.org/wiki/Q1",
+        source_type=source_type,
     )
 
 
-def test_sec_filing_scores_highest():
-    sec = score(_make("sec_filing", True, True))
-    wiki = score(_make("wikidata", True, True))
-    assert sec.person.confidence > wiki.person.confidence
+def test_wikidata_with_full_data():
+    s = score(_result("wikidata"))
+    assert 0.9 <= s <= 1.0
 
 
-def test_clamps_to_one():
-    r = score(_make("sec_filing", True, True))
-    assert r.person.confidence <= 1.0
+def test_sec_filing_high():
+    s = score(_result("sec_filing"))
+    assert s > 0.8
+
+
+def test_public_web_lower():
+    s = score(_result("public_web"))
+    assert s < 0.8
+
+
+def test_clamped_to_one():
+    s = score(_result("sec_filing"))
+    assert s <= 1.0

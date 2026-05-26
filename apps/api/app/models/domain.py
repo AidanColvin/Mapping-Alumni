@@ -1,49 +1,45 @@
-"""Core domain types. Pydantic models for safe IO."""
-from datetime import datetime
-from typing import Literal, Optional
-
-from pydantic import BaseModel, Field
-
-TitleLevel = Literal["c_suite", "founder", "vp", "director", "manager", "individual", "unknown"]
-SourceType = Literal["wikidata", "wikipedia", "company_site", "sec_filing", "university_page"]
+"""Core domain models — pure Python dataclasses, no FastAPI/Pydantic coupling."""
+from __future__ import annotations
+from dataclasses import dataclass, field
 
 
-class Institution(BaseModel):
-    id: str
+@dataclass
+class Institution:
     name: str
-    slug: str
-    aliases: list[str] = Field(default_factory=list)
-    country: Optional[str] = None
-    wikidata_id: Optional[str] = None
+    wikidata_id: str | None = None
+    source_url: str | None = None
 
 
-class Company(BaseModel):
-    id: str
+@dataclass
+class Company:
     name: str
-    slug: str
-    sector: Optional[str] = None
-    domain: Optional[str] = None
+    wikidata_id: str | None = None
+    sector: str | None = None
+    website: str | None = None
+    source_url: str | None = None
 
 
-class Employment(BaseModel):
-    company: Optional[Company] = None
-    title: str = ""
-    title_level: TitleLevel = "unknown"
-    sector: str = "other"
+@dataclass
+class Employment:
+    company: Company
+    title: str | None = None
     is_current: bool = False
 
 
-class Person(BaseModel):
-    id: str
+@dataclass
+class Person:
     full_name: str
-    source_url: str
-    source_type: SourceType
-    retrieved_at: datetime
-    confidence: float = 0.5
-    verified_fields: list[str] = Field(default_factory=list)
+    wikidata_id: str | None = None
+    source_url: str | None = None
 
 
-class SearchResult(BaseModel):
+@dataclass
+class SearchResult:
     person: Person
-    employment: list[Employment] = Field(default_factory=list)
-    institution: Optional[Institution] = None
+    institution: Institution
+    employment: Employment | None = None
+    source_url: str | None = None
+    source_type: str | None = None
+    confidence: float = 0.0
+    title_level: str | None = None
+    sector: str | None = None

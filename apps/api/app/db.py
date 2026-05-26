@@ -1,88 +1,122 @@
-"""SQLite connection + schema initialization + upsert helpers."""
 import sqlite3
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Iterator
-
+import os
+from typing import List, Dict, Any, Optional
+from app.models.domain import SearchResult, Institution
 from app.config import settings
+from app.utils.logger import get_logger
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
-_SQLITE_PREFIX = "sqlite:///"
+log = get_logger(__name__)
 
+DB_PATH = settings.database_url.replace("sqlite:///", "") if settings.database_url.startswith("sqlite:///") else "alumnimap.db"
 
-def _db_file() -> Path:
-    url = settings.database_url
-    if not url.startswith(_SQLITE_PREFIX):
-        raise ValueError("Only SQLite is supported in MVP. Set DATABASE_URL=sqlite:///./path/to/db")
-    path = Path(url[len(_SQLITE_PREFIX):])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-@contextmanager
-def get_conn() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(_db_file())
+def get_db_connection():
+    """Establishes and returns a connection to the SQLite database."""
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
+    return conn
+
+def init_db():
+    """Initializes database schema if it doesn't exist."""
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS institutions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        slug TEXT UNIQUE NOT NULL,
+        wikidata_id TEXT UNIQUE
+    );
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS people (
+        id TEXT PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        wikidata_id TEXT UNIQUE,
+        source_type TEXT,
+        source_url TEXT
+    );
+    """)
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS employment_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        person_id TEXT,
+        company_name TEXT,
+        title TEXT,
+        sector TEXT,
+        title_level TEXT,
+        confidence REAL,
+        is_current INTEGER DEFAULT 1,
+        FOREIGN KEY(person_id) REFERENCES people(id)
+    );
+    """)
+    conn.commit()
+    conn.close()
+    log.info("Database initialized successfully.")
+
+def upsert_search_results(results: List[SearchResult], institution: Any):
+    """Saves or updates search records."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
     try:
-        yield conn
+        inst_id = institution.wikidata_id or institution.slug
+        cursor.execute("""
+        INSERT INTO institutions (id, name, slug, wikidata_id)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(wikidata_id) DO UPDATE SET name=excluded.name, slug=excluded.slug;
+        """, (inst_id, institution.name, institution.slug, institution.wikidata_id))
+
+        for r in results:
+            if not r.person:
+                continue
+            
+            p_id = r.person.wikidata_id or r.person.full_name
+            cursor.execute("""
+            INSERT INTO people (id, full_name, wikidata_id, source_type, source_url)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(wikidata_id) DO UPDATE SET full_name=excluded.full_name, source_url=excluded.source_url;
+            """, (p_id, r.person.full_name, r.person.wikidata_id, r.person.source_type, r.person.source_url))
+            
+            if r.employment:
+                comp_name = r.employment.company.name if r.employment.company else None
+                cursor.execute("DELETE FROM employment_history WHERE person_id = ?", (p_id,))
+                cursor.execute("""
+                INSERT INTO employment_history (person_id, company_name, title, sector, title_level, confidence, is_current)
+                VALUES (?, ?, ?, ?, ?, ?, 1);
+                """, (p_id, comp_name, r.employment.title, r.sector, r.title_level, r.confidence))
+                
         conn.commit()
-    except Exception:
+        log.info(f"Successfully tracked stats data for {len(results)} records.")
+    except Exception as e:
         conn.rollback()
-        raise
+        log.error(f"Failed to execute database tracking write: {e}")
     finally:
         conn.close()
 
-
-def init_db() -> None:
-    """Apply all .sql migrations in order. Idempotent."""
-    with get_conn() as conn:
-        for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql")):
-            conn.executescript(sql_file.read_text())
-
-
-# --- upsert helpers used by alumni_search pipeline ---
-
-def upsert_institution(conn: sqlite3.Connection, inst) -> None:
-    conn.execute(
-        """INSERT INTO institutions (id, name, slug, country, wikidata_id)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET name=excluded.name, country=excluded.country""",
-        (inst.id, inst.name, inst.slug, inst.country, inst.wikidata_id),
-    )
-
-
-def upsert_person(conn: sqlite3.Connection, person, confidence: float) -> None:
-    conn.execute(
-        """INSERT INTO people (id, full_name, source_url, source_type, retrieved_at, confidence)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET confidence=excluded.confidence""",
-        (
-            person.id,
-            person.full_name,
-            person.source_url,
-            person.source_type,
-            person.retrieved_at.isoformat(),
-            confidence,
-        ),
-    )
-
-
-def upsert_company(conn: sqlite3.Connection, company) -> None:
-    conn.execute(
-        """INSERT INTO companies (id, name, slug, sector, domain)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO NOTHING""",
-        (company.id, company.name, company.slug, company.sector, company.domain),
-    )
-
-
-def upsert_employment(conn: sqlite3.Connection, person_id: str, emp) -> None:
-    company_id = emp.company.id if emp.company else None
-    conn.execute(
-        """INSERT INTO employment_history
-             (person_id, company_id, title, title_level, sector, is_current)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (person_id, company_id, emp.title, emp.title_level, emp.sector, int(emp.is_current)),
-    )
+def get_stats() -> Dict[str, int]:
+    """Returns aggregate statistics for the database to satisfy the /api/stats route."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM institutions")
+        inst_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM people")
+        people_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM employment_history")
+        emp_count = cursor.fetchone()[0]
+        
+        return {
+            "institutions": inst_count,
+            "people": people_count,
+            "employment_records": emp_count
+        }
+    except Exception as e:
+        log.error(f"Failed to fetch stats: {e}")
+        return {"institutions": 0, "people": 0, "employment_records": 0}
+    finally:
+        conn.close()

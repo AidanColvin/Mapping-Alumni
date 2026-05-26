@@ -1,204 +1,162 @@
-"""Wikidata adapter. Uses Entity Search API for lookup, SPARQL for alumni.
+"""Wikidata adapter — uses Entity Search API + SPARQL for alumni."""
+from __future__ import annotations
 
-Both endpoints are free and designed for programmatic use.
-We send a descriptive User-Agent per Wikimedia guidelines.
-"""
-from datetime import datetime, timezone
-from typing import Any
-from uuid import uuid4
-
+import time
 import httpx
+from typing import Any
 
-from app.config import settings
-from app.models.domain import Company, Employment, Institution, Person, SearchResult
-from app.utils import cache
-from app.utils.logger import log
+from app.models.domain import Institution, Person, Company, Employment, SearchResult
 from app.utils.sanitize import sanitize_search_name
-from app.utils.slugify import slugify
+from app.utils.logger import get_logger
 
+log = get_logger(__name__)
+
+ENTITY_SEARCH_URL = "https://www.wikidata.org/w/api.php"
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
-ENTITY_SEARCH_API = "https://www.wikidata.org/w/api.php"
-
-# Wikidata types that represent educational institutions
-_INSTITUTION_TYPES = {"Q38723", "Q3918", "Q875538", "Q1371037", "Q23002054"}
-
-
-def _q_alumni_for(wikidata_qid: str) -> str:
-    # P69 = educated at, P108 = employer, P106 = occupation
-    return f"""
-    SELECT DISTINCT ?person ?personLabel ?employer ?employerLabel ?occupation ?occupationLabel WHERE {{
-      ?person wdt:P69 wd:{wikidata_qid}.
-      OPTIONAL {{ ?person wdt:P108 ?employer. }}
-      OPTIONAL {{ ?person wdt:P106 ?occupation. }}
-      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-    }}
-    LIMIT 500
-    """
+HEADERS = {
+    "User-Agent": "AlumniMap/1.0 (https://github.com/your-org/alumnimap; alumnimap@example.org)",
+    "Accept": "application/sparql-results+json",
+}
+_LAST_SPARQL_CALL: float = 0.0
+_SPARQL_MIN_INTERVAL = 1.5  # seconds — Wikidata fair-use
 
 
-async def _entity_search(name: str) -> Institution | None:
-    """Use the Wikidata wbsearchentities API to find an institution by name."""
+def _throttle() -> None:
+    global _LAST_SPARQL_CALL
+    elapsed = time.monotonic() - _LAST_SPARQL_CALL
+    if elapsed < _SPARQL_MIN_INTERVAL:
+        time.sleep(_SPARQL_MIN_INTERVAL - elapsed)
+    _LAST_SPARQL_CALL = time.monotonic()
+
+
+# ── Institution resolution ──────────────────────────────────────────────────
+
+def resolve_institution(name: str) -> Institution | None:
+    """Resolve a university name to an Institution using the Wikidata Entity Search API."""
     safe_name = sanitize_search_name(name)
-    cache_key = f"entity_search:{safe_name}"
-    cached = cache.get(cache_key)
-    if cached and cached.get("hit"):
-        return Institution(**cached["institution"])
+    if not safe_name:
+        return None
 
     params = {
         "action": "wbsearchentities",
         "search": safe_name,
         "language": "en",
         "type": "item",
-        "limit": 10,
+        "limit": 5,
         "format": "json",
     }
     try:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": settings.user_agent}, timeout=15.0
-        ) as client:
-            r = await client.get(ENTITY_SEARCH_API, params=params)
-            if r.status_code != 200:
-                log("warn", "entity_search_failed", status=r.status_code)
-                return None
-            results = r.json().get("search", [])
-    except Exception as e:
-        log("error", "entity_search_exception", error=str(e))
+        r = httpx.get(ENTITY_SEARCH_URL, params=params, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        log.warning("Wikidata entity search failed: %s", exc)
         return None
 
-    # Find the first result that is an instance of a known institution type
-    for item in results:
-        qid = item.get("id", "")
-        label = item.get("label", "")
+    for item in data.get("search", []):
         desc = item.get("description", "").lower()
-        # Accept if description mentions university/college/institution
-        if any(kw in desc for kw in ("university", "college", "institute", "school", "académie", "académique")):
-            institution = Institution(
-                id=qid,
-                name=label,
-                slug=slugify(label),
-                aliases=[a.get("value", "") for a in item.get("aliases", {}).get("en", [])],
-                country=None,
-                wikidata_id=qid,
-            )
-            cache.put(cache_key, {"hit": True, "institution": institution.model_dump()})
-            return institution
-
-    # Fallback: accept the first result if description contains education keywords
-    for item in results:
-        qid = item.get("id", "")
         label = item.get("label", "")
-        desc = item.get("description", "").lower()
-        if any(kw in desc for kw in ("public", "private", "research", "liberal arts", "engineering")):
-            institution = Institution(
-                id=qid,
+        if any(kw in desc for kw in ("university", "college", "institute", "school")):
+            return Institution(
+                wikidata_id=item["id"],
                 name=label,
-                slug=slugify(label),
-                aliases=[],
-                country=None,
-                wikidata_id=qid,
+                source_url=f"https://www.wikidata.org/wiki/{item['id']}",
             )
-            cache.put(cache_key, {"hit": True, "institution": institution.model_dump()})
-            return institution
 
-    cache.put(cache_key, {"hit": False})
+    # Fallback: accept the first result if the label fuzzy-matches
+    for item in data.get("search", []):
+        if safe_name.lower() in item.get("label", "").lower():
+            return Institution(
+                wikidata_id=item["id"],
+                name=item["label"],
+                source_url=f"https://www.wikidata.org/wiki/{item['id']}",
+            )
     return None
 
 
-async def _run_sparql(query: str) -> list[dict[str, Any]]:
-    cache_key = "sparql:" + query
-    cached = cache.get(cache_key)
-    if cached:
-        return cached.get("bindings", [])
+# ── Alumni SPARQL query ─────────────────────────────────────────────────────
 
+_ALUMNI_QUERY = """\
+SELECT DISTINCT ?person ?personLabel ?employer ?employerLabel ?title ?titleLabel WHERE {{
+  ?person wdt:P69 wd:{qid} ;
+          wdt:P108 ?employer .
+  OPTIONAL {{
+    ?person p:P108 ?empStmt .
+    ?empStmt ps:P108 ?employer .
+    ?empStmt pq:P794 ?title .
+  }}
+  OPTIONAL {{ ?person wdt:P106 ?title . }}
+  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,*" . }}
+}}
+LIMIT {limit}
+"""
+
+
+def fetch_alumni(
+    institution_qid: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return raw Wikidata rows for alumni of the given institution QID."""
+    _throttle()
+    query = _ALUMNI_QUERY.format(qid=institution_qid, limit=limit)
     try:
-        async with httpx.AsyncClient(
-            headers={
-                "User-Agent": settings.user_agent,
-                "Accept": "application/sparql-results+json",
-            },
-            timeout=45.0,
-        ) as client:
-            r = await client.get(SPARQL_ENDPOINT, params={"query": query, "format": "json"})
-            if r.status_code == 429:
-                log("warn", "sparql_rate_limited")
-                return []
-            if r.status_code != 200:
-                log("warn", "sparql_failed", status=r.status_code)
-                return []
-            bindings = r.json().get("results", {}).get("bindings", [])
-            cache.put(cache_key, {"bindings": bindings})
-            return bindings
-    except Exception as e:
-        log("error", "sparql_exception", error=str(e))
-        return []
-
-
-async def resolve_institution(name: str) -> Institution | None:
-    """Find the canonical Wikidata institution for a free-text name.
-    Uses entity search API (faster, separate rate limit from SPARQL).
-    """
-    return await _entity_search(name)
-
-
-async def fetch_alumni(institution: Institution) -> list[SearchResult]:
-    """Return alumni records for a resolved institution via SPARQL."""
-    if not institution.wikidata_id:
-        return []
-    bindings = await _run_sparql(_q_alumni_for(institution.wikidata_id))
-
-    # Group by person URL: each person gets one record with first employer + occupation
-    person_map: dict[str, dict] = {}
-    for b in bindings:
-        person_url = b.get("person", {}).get("value", "")
-        if not person_url:
-            continue
-        name = b.get("personLabel", {}).get("value", "Unknown")
-        if name.startswith("Q") and name[1:].isdigit():
-            continue  # label fallback to QID = no English label
-
-        if person_url not in person_map:
-            person_map[person_url] = {"name": name, "employer": None, "occupation": None}
-
-        if not person_map[person_url]["employer"]:
-            employer = b.get("employerLabel", {}).get("value")
-            if employer:
-                person_map[person_url]["employer"] = employer
-
-        if not person_map[person_url]["occupation"]:
-            occupation = b.get("occupationLabel", {}).get("value")
-            if occupation:
-                person_map[person_url]["occupation"] = occupation
-
-    results: list[SearchResult] = []
-    for person_url, data in person_map.items():
-        employment: list[Employment] = []
-        if data["employer"]:
-            employment.append(
-                Employment(
-                    company=Company(
-                        id=str(uuid4()),
-                        name=data["employer"],
-                        slug=slugify(data["employer"]),
-                    ),
-                    title=data["occupation"] or "",
-                    is_current=True,
-                )
-            )
-
-        results.append(
-            SearchResult(
-                person=Person(
-                    id=person_url.rsplit("/", 1)[-1],
-                    full_name=data["name"],
-                    source_url=person_url,
-                    source_type="wikidata",
-                    retrieved_at=datetime.now(timezone.utc),
-                    confidence=0.6,
-                    verified_fields=["full_name", "education"],
-                ),
-                employment=employment,
-                institution=institution,
-            )
+        r = httpx.get(
+            SPARQL_ENDPOINT,
+            params={"query": query, "format": "json"},
+            headers=HEADERS,
+            timeout=30,
         )
+        r.raise_for_status()
+        return r.json().get("results", {}).get("bindings", [])
+    except Exception as exc:
+        log.warning("Wikidata SPARQL failed for %s: %s", institution_qid, exc)
+        return []
 
+
+# ── Row → domain model ──────────────────────────────────────────────────────
+
+def _row_to_search_result(row: dict[str, Any], institution: Institution) -> SearchResult | None:
+    person_uri = row.get("person", {}).get("value", "")
+    person_label = row.get("personLabel", {}).get("value", "")
+    employer_label = row.get("employerLabel", {}).get("value", "")
+    title_label = row.get("titleLabel", {}).get("value", "")
+
+    if not person_label or person_label.startswith("Q"):
+        return None
+
+    qid = person_uri.rsplit("/", 1)[-1] if person_uri else ""
+    person = Person(
+        full_name=person_label,
+        wikidata_id=qid,
+        source_url=person_uri or f"https://www.wikidata.org/wiki/{qid}",
+    )
+    employment = Employment(
+        company=Company(name=employer_label or "Unknown"),
+        title=title_label or "",
+        is_current=True,
+    )
+    return SearchResult(
+        person=person,
+        institution=institution,
+        employment=employment,
+        source_url=person_uri,
+        source_type="wikidata",
+    )
+
+
+def build_search_results(
+    rows: list[dict[str, Any]], institution: Institution
+) -> list[SearchResult]:
+    """Convert raw SPARQL rows to deduplicated SearchResult objects."""
+    seen: set[str] = set()
+    results: list[SearchResult] = []
+    for row in rows:
+        sr = _row_to_search_result(row, institution)
+        if sr is None:
+            continue
+        key = sr.person.wikidata_id or sr.person.full_name
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(sr)
     return results

@@ -1,15 +1,15 @@
-"""Structured JSON logging."""
-import json
+import logging
 import sys
-from datetime import datetime, timezone
 
-
-def log(level: str, message: str, **meta) -> None:
-    entry = {
-        "level": level,
-        "message": message,
-        "ts": datetime.now(timezone.utc).isoformat(),
-        **meta,
-    }
-    stream = sys.stderr if level == "error" else sys.stdout
-    print(json.dumps(entry), file=stream, flush=True)
+def get_logger(name: str) -> logging.Logger:
+    """Returns a configured logger with standard formatting."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    return logger

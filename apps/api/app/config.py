@@ -1,24 +1,21 @@
-"""Application configuration loaded from environment."""
-from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+"""Application configuration via environment variables."""
+from __future__ import annotations
+import os
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./data/sqlite/alumnimap.db"
-    cache_dir: str = "./data/cache"
-    # EDGAR requires: "CompanyName admin@company.com"
-    user_agent: str = "AlumniMap alumnimap@example.org"
-    rate_limit_per_min: int = 30
-    cache_ttl_hours: int = 24
-    cors_origins: str = "http://localhost:3000,http://localhost:3001"
+    database_url: str = "sqlite:///./alumnimap.db"
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://your-org.github.io",  # update to your actual GitHub Pages URL
+    ]
+    rate_limit_per_minute: int = 30
+    cache_dir: str = ".cache"
+    log_level: str = "INFO"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    @property
-    def cache_path(self) -> Path:
-        p = Path(self.cache_dir)
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
 settings = Settings()
