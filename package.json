@@ -2,7 +2,7 @@
   "name": "@alumnimap/web",
   "version": "0.0.1",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev apps/web",
     "build": "next build",
     "start": "next start"
   },
