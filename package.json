@@ -1,11 +1,8 @@
 {
-  "name": "alumnimap",
+  "name": "alumnimap-root",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
-  "scripts": {
-    "dev:web": "npm run dev --workspace=apps/web",
-    "dev:api": "npm run dev --workspace=apps/api",
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces --if-present"
-  }
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }

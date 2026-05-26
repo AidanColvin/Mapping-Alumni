@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 from app.models.domain import SearchResult, Institution
 
+SearchResultSchema = SearchResult
+
 class SearchInput(BaseModel):
     university: str
     sector: Optional[str] = None
@@ -13,7 +15,7 @@ class SearchInput(BaseModel):
     offset: int = 0
 
 class SearchResponse(BaseModel):
-    results: List[SearchResult]
+    results: List[SearchResultSchema]
     total: int
     institution: Optional[Dict[str, Any]] = None
 
