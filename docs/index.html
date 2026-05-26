@@ -1,12 +1,745 @@
 <!DOCTYPE html>
-<html>
-<head><title>UNC Alumni Demo</title></head>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alumni Map — Find Alumni in C-Suite Roles</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --unc-blue: #4B9CD3;
+      --unc-navy: #13294B;
+      --unc-light: #EEF5FB;
+      --text: #1a1a2e;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --card-bg: #ffffff;
+      --bg: #f8fafc;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--unc-navy);
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: var(--unc-blue);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+    }
+
+    .logo-text {
+      color: #fff;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-text span {
+      color: var(--unc-blue);
+    }
+
+    .header-badge {
+      margin-left: auto;
+      background: rgba(75, 156, 211, 0.2);
+      color: var(--unc-blue);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Hero / Search ── */
+    .hero {
+      background: linear-gradient(135deg, var(--unc-navy) 0%, #1a3a6b 100%);
+      padding: 60px 32px 70px;
+      text-align: center;
+    }
+
+    .hero h1 {
+      color: #fff;
+      font-size: 36px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      letter-spacing: -0.5px;
+    }
+
+    .hero h1 span { color: var(--unc-blue); }
+
+    .hero p {
+      color: rgba(255,255,255,0.65);
+      font-size: 16px;
+      margin-bottom: 32px;
+    }
+
+    .search-box {
+      display: flex;
+      gap: 0;
+      max-width: 520px;
+      margin: 0 auto;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+
+    .search-box input {
+      flex: 1;
+      padding: 16px 20px;
+      font-size: 16px;
+      border: none;
+      outline: none;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .search-box input::placeholder { color: #9ca3af; }
+
+    .search-box button {
+      background: var(--unc-blue);
+      color: #fff;
+      border: none;
+      padding: 16px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .search-box button:hover { background: #3a8bc2; }
+
+    .search-hint {
+      margin-top: 14px;
+      color: rgba(255,255,255,0.45);
+      font-size: 13px;
+    }
+
+    .search-hint strong { color: rgba(255,255,255,0.75); }
+
+    /* ── Results layout ── */
+    .results-wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 24px 60px;
+    }
+
+    /* ── Loading ── */
+    #loading {
+      text-align: center;
+      padding: 60px 0;
+      display: none;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--unc-blue);
+      border-radius: 50%;
+      margin: 0 auto 16px;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Results header ── */
+    #results-header {
+      display: none;
+      margin-bottom: 24px;
+    }
+
+    .university-name {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--unc-navy);
+    }
+
+    .results-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+
+    .results-meta span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+
+    .tag-blue { background: #dbeafe; color: #1d4ed8; }
+    .tag-green { background: #d1fae5; color: #065f46; }
+    .tag-amber { background: #fef3c7; color: #92400e; }
+    .tag-purple { background: #ede9fe; color: #5b21b6; }
+    .tag-pink { background: #fce7f3; color: #9d174d; }
+    .tag-gray { background: #f3f4f6; color: #374151; }
+    .tag-unc { background: var(--unc-light); color: var(--unc-navy); }
+
+    /* ── Stats bar ── */
+    .stats-bar {
+      display: none;
+      gap: 16px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+
+    .stat-card {
+      flex: 1;
+      min-width: 140px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      text-align: center;
+    }
+
+    .stat-card .number {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--unc-navy);
+    }
+
+    .stat-card .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Sector filter ── */
+    .sector-filter {
+      display: none;
+      gap: 8px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .sector-btn {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1.5px solid var(--border);
+      background: var(--card-bg);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      color: var(--muted);
+      transition: all 0.15s;
+    }
+
+    .sector-btn:hover, .sector-btn.active {
+      background: var(--unc-navy);
+      border-color: var(--unc-navy);
+      color: #fff;
+    }
+
+    /* ── Cards grid ── */
+    #cards-grid {
+      display: none;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 18px;
+    }
+
+    .alumni-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: box-shadow 0.15s, transform 0.15s;
+      cursor: default;
+    }
+
+    .alumni-card:hover {
+      box-shadow: 0 6px 24px rgba(0,0,0,0.09);
+      transform: translateY(-2px);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--unc-blue), var(--unc-navy));
+      color: #fff;
+      font-size: 17px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      text-transform: uppercase;
+    }
+
+    .card-name { font-size: 16px; font-weight: 700; line-height: 1.3; }
+    .card-title { font-size: 13px; color: var(--muted); margin-top: 1px; font-style: italic; }
+    .card-company { font-size: 14px; font-weight: 600; color: var(--unc-navy); }
+
+    .card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .card-footer {
+      margin-top: auto;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .confidence-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .confidence-bar {
+      width: 60px;
+      height: 5px;
+      background: var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      background: #22c55e;
+      border-radius: 10px;
+    }
+
+    .confidence-label { font-size: 11px; color: var(--muted); }
+
+    .source-link {
+      font-size: 11px;
+      color: var(--unc-blue);
+      text-decoration: none;
+    }
+
+    .source-link:hover { text-decoration: underline; }
+
+    /* ── Pagination hint ── */
+    .pagination-hint {
+      display: none;
+      text-align: center;
+      margin-top: 36px;
+      padding: 20px;
+      background: var(--unc-light);
+      border-radius: 12px;
+      border: 1px dashed var(--unc-blue);
+    }
+
+    .pagination-hint p { color: var(--unc-navy); font-size: 14px; }
+    .pagination-hint strong { font-weight: 700; }
+
+    /* ── Empty / idle state ── */
+    .idle-state {
+      text-align: center;
+      padding: 60px 20px;
+    }
+
+    .idle-icon { font-size: 56px; margin-bottom: 16px; }
+    .idle-state h2 { font-size: 22px; font-weight: 700; color: var(--unc-navy); margin-bottom: 8px; }
+    .idle-state p { color: var(--muted); font-size: 15px; max-width: 480px; margin: 0 auto; }
+
+    /* ── Typing cursor ── */
+    .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: var(--unc-navy);
+      margin-left: 1px;
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* ── Demo banner ── */
+    .demo-banner {
+      background: #fffbeb;
+      border-bottom: 1px solid #fde68a;
+      padding: 9px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: #92400e;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      .hero { padding: 40px 16px 50px; }
+      .hero h1 { font-size: 26px; }
+      .results-wrap { padding: 24px 14px 40px; }
+      #cards-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
 <body>
-  <h1>UNC Chapel Hill Fortune 500 Alumni</h1>
-  <ul>
-    <li>Chuck Robbins - CEO, Cisco Systems</li>
-    <li>Michele Buck - CEO, The Hershey Company</li>
-    <li>Bill Rogers - CEO, Truist Financial</li>
-  </ul>
+
+<div class="demo-banner">
+  ✦ Interactive demo — showing real Fortune 500 C-Suite alumni data for UNC Chapel Hill
+</div>
+
+<header>
+  <a class="logo" href="#">
+    <div class="logo-icon">🗺️</div>
+    <div class="logo-text">Alumni<span>Map</span></div>
+  </a>
+  <div class="header-badge">Demo</div>
+</header>
+
+<div class="hero">
+  <h1>Find Alumni in <span>C-Suite Roles</span></h1>
+  <p>Search any university to discover its alumni leading Fortune 500 companies.</p>
+  <div class="search-box">
+    <input
+      id="search-input"
+      type="text"
+      placeholder="Enter a university name…"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <button id="search-btn" onclick="runSearch()">Search</button>
+  </div>
+  <p class="search-hint">Try: <strong>UNC Chapel Hill</strong>, Duke, Stanford, MIT</p>
+</div>
+
+<div class="results-wrap">
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <p style="color:var(--muted);font-size:14px;">Searching alumni records…</p>
+  </div>
+
+  <div id="results-header">
+    <div class="university-name" id="uni-name">University of North Carolina at Chapel Hill</div>
+    <div class="results-meta">
+      <span id="results-count">47 alumni found</span>
+      <span>·</span>
+      <span>United States</span>
+      <span class="tag tag-unc">Fortune 500 Focus</span>
+    </div>
+  </div>
+
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-card">
+      <div class="number" id="stat-total">47</div>
+      <div class="label">Alumni Indexed</div>
+    </div>
+    <div class="stat-card">
+      <div class="number">8</div>
+      <div class="label">Fortune 500</div>
+    </div>
+    <div class="stat-card">
+      <div class="number">6</div>
+      <div class="label">Sectors</div>
+    </div>
+    <div class="stat-card">
+      <div class="number">94%</div>
+      <div class="label">Avg Confidence</div>
+    </div>
+  </div>
+
+  <div class="sector-filter" id="sector-filter">
+    <button class="sector-btn active" onclick="filterSector(this, 'all')">All</button>
+    <button class="sector-btn" onclick="filterSector(this, 'Technology')">Technology</button>
+    <button class="sector-btn" onclick="filterSector(this, 'Finance')">Finance</button>
+    <button class="sector-btn" onclick="filterSector(this, 'Consumer Goods')">Consumer Goods</button>
+    <button class="sector-btn" onclick="filterSector(this, 'Healthcare')">Healthcare</button>
+    <button class="sector-btn" onclick="filterSector(this, 'Industrials')">Industrials</button>
+    <button class="sector-btn" onclick="filterSector(this, 'Media')">Media</button>
+  </div>
+
+  <div id="cards-grid"></div>
+
+  <div class="pagination-hint" id="pagination-hint">
+    <p>Showing <strong>8 of 47</strong> alumni — sign in to unlock full results, export to CSV, and filter by graduation year.</p>
+  </div>
+
+  <div class="idle-state" id="idle-state">
+    <div class="idle-icon">🎓</div>
+    <h2>Discover where alumni lead</h2>
+    <p>Enter a university name above to explore alumni who have risen to C-Suite positions at major companies.</p>
+  </div>
+
+</div>
+
+<script>
+  const DEMO_DATA = [
+    {
+      name: "Chuck Robbins",
+      initials: "CR",
+      title: "Chief Executive Officer",
+      company: "Cisco Systems",
+      sector: "Technology",
+      level: "C-Suite",
+      confidence: 0.99,
+      source: "Wikipedia",
+      source_url: "https://en.wikipedia.org/wiki/Chuck_Robbins",
+      grad_year: "1984",
+    },
+    {
+      name: "Michele Buck",
+      initials: "MB",
+      title: "Chief Executive Officer",
+      company: "The Hershey Company",
+      sector: "Consumer Goods",
+      level: "C-Suite",
+      confidence: 0.99,
+      source: "Company Site",
+      source_url: "https://www.thehersheycompany.com",
+      grad_year: "1984",
+    },
+    {
+      name: "Bill Rogers",
+      initials: "BR",
+      title: "Chief Executive Officer",
+      company: "Truist Financial",
+      sector: "Finance",
+      level: "C-Suite",
+      confidence: 0.98,
+      source: "Company Site",
+      source_url: "https://www.truist.com",
+      grad_year: "1980",
+    },
+    {
+      name: "Hugh McColl Jr.",
+      initials: "HM",
+      title: "Former Chairman & CEO",
+      company: "Bank of America",
+      sector: "Finance",
+      level: "C-Suite",
+      confidence: 0.97,
+      source: "Wikipedia",
+      source_url: "https://en.wikipedia.org/wiki/Hugh_McColl",
+      grad_year: "1957",
+    },
+    {
+      name: "James Goodnight",
+      initials: "JG",
+      title: "Co-founder & CEO",
+      company: "SAS Institute",
+      sector: "Technology",
+      level: "C-Suite",
+      confidence: 0.99,
+      source: "Wikipedia",
+      source_url: "https://en.wikipedia.org/wiki/James_Goodnight",
+      grad_year: "1972",
+    },
+    {
+      name: "Erskine Bowles",
+      initials: "EB",
+      title: "President (Emeritus)",
+      company: "UNC System / Morgan Stanley",
+      sector: "Finance",
+      level: "C-Suite",
+      confidence: 0.95,
+      source: "Wikipedia",
+      source_url: "https://en.wikipedia.org/wiki/Erskine_Bowles",
+      grad_year: "1967",
+    },
+    {
+      name: "Walter Robb",
+      initials: "WR",
+      title: "Former Co-CEO",
+      company: "Whole Foods Market",
+      sector: "Consumer Goods",
+      level: "C-Suite",
+      confidence: 0.93,
+      source: "LinkedIn",
+      source_url: "#",
+      grad_year: "1978",
+    },
+    {
+      name: "Steve Koonin",
+      initials: "SK",
+      title: "Chief Executive Officer",
+      company: "Atlanta Hawks / NBA",
+      sector: "Media",
+      level: "C-Suite",
+      confidence: 0.91,
+      source: "LinkedIn",
+      source_url: "#",
+      grad_year: "1980",
+    },
+  ];
+
+  const SECTOR_COLORS = {
+    Technology: "tag-blue",
+    Finance: "tag-green",
+    "Consumer Goods": "tag-amber",
+    Healthcare: "tag-purple",
+    Industrials: "tag-gray",
+    Media: "tag-pink",
+  };
+
+  let currentSector = "all";
+
+  function tagColor(sector) {
+    return SECTOR_COLORS[sector] || "tag-gray";
+  }
+
+  function renderCard(d) {
+    const conf = Math.round(d.confidence * 100);
+    return `
+      <div class="alumni-card" data-sector="${d.sector}">
+        <div class="card-top">
+          <div class="avatar">${d.initials}</div>
+          <div>
+            <div class="card-name">${d.name}</div>
+            <div class="card-title">${d.title}</div>
+          </div>
+        </div>
+        <div class="card-company">${d.company}</div>
+        <div class="card-tags">
+          <span class="tag ${tagColor(d.sector)}">${d.sector}</span>
+          <span class="tag tag-unc">${d.level}</span>
+          ${d.grad_year ? `<span class="tag tag-gray">Class of '${d.grad_year.slice(-2)}</span>` : ""}
+        </div>
+        <div class="card-footer">
+          <div class="confidence-bar-wrap">
+            <div class="confidence-bar">
+              <div class="confidence-fill" style="width:${conf}%"></div>
+            </div>
+            <span class="confidence-label">${conf}% confidence</span>
+          </div>
+          ${d.source_url && d.source_url !== "#"
+            ? `<a class="source-link" href="${d.source_url}" target="_blank" rel="noopener">↗ ${d.source}</a>`
+            : `<span class="source-link" style="color:var(--muted)">${d.source}</span>`}
+        </div>
+      </div>`;
+  }
+
+  function filterSector(btn, sector) {
+    currentSector = sector;
+    document.querySelectorAll(".sector-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+
+    document.querySelectorAll(".alumni-card").forEach(card => {
+      card.style.display =
+        sector === "all" || card.dataset.sector === sector ? "" : "none";
+    });
+  }
+
+  function show(id, asGrid) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = asGrid ? "grid" : "flex";
+  }
+
+  function hide(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  }
+
+  function runSearch(query) {
+    const input = document.getElementById("search-input");
+    const q = (query || input.value).trim().toLowerCase();
+
+    if (!q) return;
+
+    hide("idle-state");
+    hide("results-header");
+    hide("stats-bar");
+    hide("sector-filter");
+    hide("cards-grid");
+    hide("pagination-hint");
+    show("loading");
+
+    setTimeout(() => {
+      hide("loading");
+
+      const isUNC = q.includes("unc") || q.includes("chapel hill") ||
+                    q.includes("north carolina") || q.includes("tarheels");
+
+      const uniName = isUNC
+        ? "University of North Carolina at Chapel Hill"
+        : `${input.value.trim()} (Demo — showing UNC data)`;
+
+      document.getElementById("uni-name").textContent = uniName;
+      document.getElementById("results-count").textContent = "47 alumni found";
+      document.getElementById("stat-total").textContent = "47";
+
+      const grid = document.getElementById("cards-grid");
+      grid.innerHTML = DEMO_DATA.map(renderCard).join("");
+
+      show("results-header");
+      show("stats-bar");
+      show("sector-filter");
+      show("cards-grid", true);
+      show("pagination-hint");
+      document.getElementById("pagination-hint").style.display = "block";
+    }, 900);
+  }
+
+  document.getElementById("search-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") runSearch();
+  });
+
+  /* ── Auto-demo: type "UNC Chapel Hill" on load ── */
+  (function autoDemo() {
+    const input = document.getElementById("search-input");
+    const phrase = "UNC Chapel Hill";
+    let i = 0;
+
+    function typeNext() {
+      if (i <= phrase.length) {
+        input.value = phrase.slice(0, i);
+        i++;
+        setTimeout(typeNext, 75 + Math.random() * 60);
+      } else {
+        setTimeout(() => runSearch(phrase), 500);
+      }
+    }
+
+    setTimeout(typeNext, 1200);
+  })();
+</script>
+
 </body>
 </html>
