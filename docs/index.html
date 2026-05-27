@@ -494,7 +494,7 @@
   /* ── Card renderer ─────────────────────────────────────────────────────── */
   function renderCard(d) {
     const conf    = Math.round(d.confidence * 100);
-    const logoSrc = `https://logo.clearbit.com/${d.companyDomain}`;
+    const logoSrc = `https://www.google.com/s2/favicons?domain=${d.companyDomain}&sz=128`;
     const yr      = d.grad_year ? `<span class="tag tag-gray">Class of '${d.grad_year.slice(-2)}</span>` : "";
 
     // Build source links
